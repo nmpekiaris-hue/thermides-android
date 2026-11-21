@@ -42,9 +42,15 @@ data class HealthSnapshot(
     val restingHeartRate: HeartReading?,
     /** Τελευταίες ημέρες, η πιο πρόσφατη πρώτη. */
     val days: List<DayStat>,
-    /** Άδειες που δεν έχουν δοθεί (για μήνυμα στην οθόνη). */
-    val missingPermissions: Int,
+    /** Ονόματα μετρήσεων για τις οποίες δεν έχει δοθεί άδεια. */
+    val missing: List<String>,
+    /** Βήματα σήμερα ανά εφαρμογή-πηγή (όπως τα έγραψε η καθεμία στο Health Connect). */
+    val stepSources: List<SourceSteps>,
+    /** Το σύνολο βημάτων σήμερα όπως το υπολογίζει το Health Connect (χωρίς διπλομέτρημα). */
+    val stepsTotalToday: Long?,
 )
+
+data class SourceSteps(val source: String, val packageName: String, val steps: Long)
 
 /** Ανάγνωση από το Health Connect. Η εφαρμογή δεν γράφει ποτέ εκεί. */
 class HealthRepo(context: Context) {
@@ -60,6 +66,15 @@ class HealthRepo(context: Context) {
         val P_WEIGHT = HealthPermission.getReadPermission(WeightRecord::class)
 
         val PERMISSIONS: Set<String> = setOf(P_BP, P_HR, P_RHR, P_STEPS, P_ACTIVE, P_WEIGHT)
+
+        private val LABELS = linkedMapOf(
+            P_BP to "πίεση",
+            P_HR to "παλμοί",
+            P_RHR to "παλμοί ηρεμίας",
+            P_STEPS to "βήματα",
+            P_ACTIVE to "ενεργές θερμίδες",
+            P_WEIGHT to "βάρος",
+        )
 
         /** Το Health Connect δίνει προεπιλεγμένα μόνο τις τελευταίες 30 ημέρες πριν από την άδεια. */
         const val HISTORY_DAYS = 30L
@@ -175,8 +190,45 @@ class HealthRepo(context: Context) {
             lastHeartRate = lastHr,
             restingHeartRate = resting,
             days = dayStats(granted),
-            missingPermissions = PERMISSIONS.count { it !in granted },
+            missing = LABELS.filterKeys { it !in granted }.values.toList(),
+            stepSources = if (P_STEPS in granted) stepSourcesToday() else emptyList(),
+            stepsTotalToday = if (P_STEPS in granted) {
+                client.aggregate(
+                    AggregateRequest(
+                        metrics = setOf(StepsRecord.COUNT_TOTAL),
+                        timeRangeFilter = TimeRangeFilter.between(
+                            LocalDate.now().atStartOfDay(), LocalDate.now().plusDays(1).atStartOfDay()
+                        ),
+                    )
+                )[StepsRecord.COUNT_TOTAL]
+            } else null,
         )
+    }
+
+    /** Διαβάζει όλες τις εγγραφές βημάτων της ημέρας και τις αθροίζει ανά εφαρμογή που τις έγραψε. */
+    private suspend fun stepSourcesToday(): List<SourceSteps> {
+        val today = LocalDate.now()
+        val filter = TimeRangeFilter.between(today.atStartOfDay(), today.plusDays(1).atStartOfDay())
+        val totals = LinkedHashMap<String, Long>()
+        var token: String? = null
+        var pages = 0
+        do {
+            val response = client.readRecords(
+                ReadRecordsRequest(
+                    recordType = StepsRecord::class,
+                    timeRangeFilter = filter,
+                    pageSize = 5000,
+                    pageToken = token,
+                )
+            )
+            response.records.forEach { rec ->
+                val pkg = rec.metadata.dataOrigin.packageName
+                totals[pkg] = (totals[pkg] ?: 0L) + rec.count
+            }
+            token = response.pageToken
+            pages++
+        } while (token != null && pages < 10)
+        return totals.map { SourceSteps(sourceLabel(it.key), it.key, it.value) }.sortedByDescending { it.steps }
     }
 
     private suspend fun dayStats(granted: Set<String>): List<DayStat> {

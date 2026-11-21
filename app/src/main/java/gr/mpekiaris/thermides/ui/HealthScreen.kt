@@ -118,11 +118,12 @@ fun HealthScreen(vm: MainViewModel) {
             HealthStatus.READY -> {
                 val data = snapshot
                 if (data != null) {
-                    if (data.missingPermissions > 0) {
+                    if (data.missing.isNotEmpty()) {
                         item {
                             InfoCard(
-                                title = "Λείπουν ${data.missingPermissions} άδειες",
-                                body = "Κάποιες μετρήσεις δεν εμφανίζονται επειδή δεν έχει δοθεί η αντίστοιχη άδεια.",
+                                title = "Λείπουν άδειες",
+                                body = "Δεν έχει δοθεί άδεια για: ${data.missing.joinToString(", ")}. " +
+                                    "Γι' αυτό οι μετρήσεις αυτές δεν εμφανίζονται.",
                                 action = "Δώσε τις άδειες",
                                 onAction = { requestPermissions.launch(HealthRepo.PERMISSIONS) },
                             )
@@ -130,6 +131,7 @@ fun HealthScreen(vm: MainViewModel) {
                     }
                     item { LatestCard(data) }
                     item { BloodPressureCard(data.bloodPressure) }
+                    item { StepSourcesCard(data) }
                     item { DaysCard(data.days) }
                     item { WeightCard(data.weights) }
                     item {
@@ -195,7 +197,7 @@ private fun LatestCard(data: HealthSnapshot) {
                 Metric("Παλμοί ηρεμίας", "${it.bpm} bpm", stamp(it.time))
             }
             HorizontalDivider()
-            Metric("Βήματα σήμερα", today?.steps?.let { kcal(it.toInt()) } ?: "—", null)
+            Metric("Βήματα σήμερα", (data.stepsTotalToday ?: today?.steps)?.let { kcal(it.toInt()) } ?: "—", null)
             HorizontalDivider()
             Metric("Ενεργές θερμίδες σήμερα", today?.activeKcal?.let { "${kcal(it.roundToInt())} kcal" } ?: "—", null)
             HorizontalDivider()
@@ -211,7 +213,13 @@ private fun BloodPressureCard(readings: List<BpReading>) {
         Column(Modifier.padding(16.dp)) {
             Text("Ιστορικό πίεσης", style = MaterialTheme.typography.titleMedium)
             if (readings.isEmpty()) {
-                Empty("Δεν βρέθηκαν μετρήσεις πίεσης τις τελευταίες 30 ημέρες.")
+                Empty(
+                    "Το Health Connect δεν έχει καμία μέτρηση πίεσης τις τελευταίες 30 ημέρες. " +
+                        "Αυτό σημαίνει ότι το OMRON connect δεν τις στέλνει εκεί: άνοιξε το OMRON connect, " +
+                        "βρες τη σύνδεση με Health Connect (στο μενού/προφίλ, «Συνδεδεμένες εφαρμογές») και " +
+                        "ενεργοποίησέ την με άδεια εγγραφής για την πίεση. Συγχρονίζονται συνήθως μόνο οι " +
+                        "μετρήσεις που γίνονται μετά τη σύνδεση."
+                )
             } else {
                 val avgSys = readings.map { it.systolic }.average().roundToInt()
                 val avgDia = readings.map { it.diastolic }.average().roundToInt()
@@ -224,6 +232,29 @@ private fun BloodPressureCard(readings: List<BpReading>) {
                 readings.take(20).forEach { reading ->
                     HistoryRow(stamp(reading.time), "${reading.systolic}/${reading.diastolic}")
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepSourcesCard(data: HealthSnapshot) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Βήματα σήμερα ανά πηγή", style = MaterialTheme.typography.titleMedium)
+            if (data.stepSources.isEmpty()) {
+                Empty("Καμία εφαρμογή δεν έχει γράψει βήματα στο Health Connect σήμερα.")
+            } else {
+                data.stepSources.forEach { HistoryRow("${it.source} (${it.packageName})", kcal(it.steps.toInt())) }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                HistoryRow("Σύνολο Health Connect", data.stepsTotalToday?.let { kcal(it.toInt()) } ?: "—")
+                Text(
+                    "Το σύνολο το βγάζει το Health Connect συνδυάζοντας τις πηγές (χωρίς διπλομέτρημα). " +
+                        "Αν δεν βλέπεις εδώ την εφαρμογή του ρολογιού, το ρολόι δεν στέλνει βήματα στο Health Connect.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
             }
         }
     }
