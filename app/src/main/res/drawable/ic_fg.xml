@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- δακτύλιος προόδου -->
+    <path
+        android:pathData="M54,30 A24,24 0 1,1 30,54"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M30,54 A24,24 0 0,1 54,30"
+        android:strokeColor="#66FFFFFF"
+        android:strokeWidth="7" />
+    <!-- φλόγα -->
+    <path
+        android:fillColor="#FFB300"
+        android:pathData="M54,41 C58,47 63,51 63,58 A9,9 0 0,1 45,58 C45,54 47,51 49,49 C50,52 52,53 53,52 C55,49 54,45 54,41 Z" />
+</vector>
