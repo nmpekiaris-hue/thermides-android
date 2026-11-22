@@ -9,7 +9,9 @@ import gr.mpekiaris.thermides.data.FoodEntry
 import gr.mpekiaris.thermides.data.FrequentFood
 import gr.mpekiaris.thermides.data.Meal
 import gr.mpekiaris.thermides.data.Prefs
+import gr.mpekiaris.thermides.data.WeightEntry
 import gr.mpekiaris.thermides.fasting.Fasting
+import gr.mpekiaris.thermides.health.Burned
 import gr.mpekiaris.thermides.health.HealthRepo
 import gr.mpekiaris.thermides.health.HealthSnapshot
 import gr.mpekiaris.thermides.health.HealthStatus
@@ -38,15 +40,21 @@ data class DayUi(
     val recentTimes: List<Long> = emptyList(),
 )
 
+/** Ένα σημείο της πορείας βάρους. [manual] = καταχωρήθηκε στην εφαρμογή (αλλιώς ήρθε από το Health Connect). */
+data class WeightPoint(val date: LocalDate, val kg: Double, val manual: Boolean)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = AppDb.get(app).food()
+    private val weightDao = AppDb.get(app).weight()
     private val prefs = Prefs(app)
     private val health = HealthRepo(app)
 
     val day = MutableStateFlow(LocalDate.now())
     val goal = MutableStateFlow(prefs.goal)
     val fastHours = MutableStateFlow(prefs.fastHours)
+    val fastStart = MutableStateFlow(prefs.fastStart)
+    val goalWeight = MutableStateFlow(prefs.goalWeight)
     val hasApiKey = MutableStateFlow(false)
 
     val healthStatus = MutableStateFlow(HealthStatus.UNAVAILABLE)
@@ -54,8 +62,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val healthLoading = MutableStateFlow(false)
     val healthError = MutableStateFlow<String?>(null)
 
-    /** Ενεργές θερμίδες της επιλεγμένης ημέρας από το Health Connect (null = δεν υπάρχουν). */
-    val activeKcal = MutableStateFlow<Double?>(null)
+    /** Θερμίδες που κάηκαν την επιλεγμένη ημέρα, από το ρολόι μέσω Health Connect (null = δεν υπάρχουν). */
+    val burned = MutableStateFlow<Burned?>(null)
 
     private fun startOf(date: LocalDate): Long =
         date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -64,16 +72,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         day,
         day.flatMapLatest { d -> dao.between(startOf(d.minusDays(7)), startOf(d.plusDays(1))) },
         fastHours,
-    ) { d, all, fast ->
+        fastStart,
+    ) { d, all, fast, start ->
         // Το flatMapLatest μπορεί να δώσει για μια στιγμή τη λίστα της προηγούμενης ημέρας· είναι ακίνδυνο,
         // γιατί φιλτράρουμε ξανά με βάση την ημερομηνία.
         val sorted = all.sortedBy { it.time }
-        val outside = Fasting.outside(sorted.map { it.time }, fast)
+        val zone = ZoneId.systemDefault()
         val from = startOf(d)
         val to = startOf(d.plusDays(1))
         val rows = sorted.indices
             .filter { sorted[it].time in from until to }
-            .map { FoodRow(sorted[it], outside[it]) }
+            .map { FoodRow(sorted[it], Fasting.outside(sorted[it].time, start, fast, zone)) }
         val week = (6 downTo 0).map { d.minusDays(it.toLong()) }.map { date ->
             val a = startOf(date)
             val b = startOf(date.plusDays(1))
@@ -85,9 +94,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val frequent: StateFlow<List<FrequentFood>> =
         dao.frequent().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /**
+     * Πορεία βάρους, ένα σημείο ανά ημέρα σε αύξουσα σειρά. Η χειροκίνητη καταχώρηση υπερισχύει·
+     * αλλιώς μπαίνει το πρώτο (πρωινό) ζύγισμα της ημέρας από το Health Connect.
+     */
+    val weights: StateFlow<List<WeightPoint>> = combine(weightDao.all(), healthSnapshot) { manual, snapshot ->
+        val byDay = sortedMapOf<LocalDate, WeightPoint>()
+        snapshot?.weights.orEmpty().sortedByDescending { it.time }.forEach { reading ->
+            val date = reading.time.atZone(ZoneId.systemDefault()).toLocalDate()
+            byDay[date] = WeightPoint(date, reading.kg, manual = false)
+        }
+        manual.forEach { entry ->
+            val date = LocalDate.ofEpochDay(entry.day)
+            byDay[date] = WeightPoint(date, entry.kg, manual = true)
+        }
+        byDay.values.toList()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     init {
         viewModelScope.launch { hasApiKey.value = prefs.apiKey != null }
-        viewModelScope.launch { day.collectLatest { loadActiveKcal(it) } }
+        viewModelScope.launch { day.collectLatest { loadBurned(it) } }
         refreshHealth()
     }
 
@@ -126,7 +152,25 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         dao.deleteBetween(startOf(d), startOf(d.plusDays(1)))
     }
 
+    // ---- Βάρος ----
+
+    fun saveWeight(date: LocalDate, kg: Double) = viewModelScope.launch {
+        weightDao.put(WeightEntry(date.toEpochDay(), kg))
+    }
+
+    fun deleteWeight(date: LocalDate) = viewModelScope.launch { weightDao.delete(date.toEpochDay()) }
+
+    fun setGoalWeight(value: Float?) {
+        prefs.goalWeight = value
+        goalWeight.value = value
+    }
+
     // ---- Ρυθμίσεις ----
+
+    fun setFastStart(minuteOfDay: Int) {
+        prefs.fastStart = minuteOfDay
+        fastStart.value = minuteOfDay
+    }
 
     fun setGoal(value: Int) {
         prefs.goal = value
@@ -185,12 +229,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } finally {
             healthLoading.value = false
         }
-        loadActiveKcal(day.value)
+        loadBurned(day.value)
     }
 
-    private suspend fun loadActiveKcal(date: LocalDate) {
-        activeKcal.value = try {
-            health.activeKcal(date)
+    private suspend fun loadBurned(date: LocalDate) {
+        burned.value = try {
+            health.burned(date)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {

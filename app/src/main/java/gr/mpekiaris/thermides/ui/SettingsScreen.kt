@@ -1,5 +1,6 @@
 package gr.mpekiaris.thermides.ui
 
+import android.app.TimePickerDialog
 import android.content.Intent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,8 @@ fun SettingsScreen(vm: MainViewModel) {
     val goal by vm.goal.collectAsStateWithLifecycle()
     val fastHours by vm.fastHours.collectAsStateWithLifecycle()
     val hasApiKey by vm.hasApiKey.collectAsStateWithLifecycle()
+    val fastStart by vm.fastStart.collectAsStateWithLifecycle()
+    val goalWeight by vm.goalWeight.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     Column(
@@ -79,6 +82,44 @@ fun SettingsScreen(vm: MainViewModel) {
             }
         }
 
+        // --- Στόχος βάρους ---
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Στόχος βάρους", style = MaterialTheme.typography.titleMedium)
+                var weightText by remember(goalWeight) {
+                    mutableStateOf(goalWeight?.let { String.format(java.util.Locale.US, "%.1f", it) } ?: "")
+                }
+                val parsedWeight = weightText.replace(',', '.').toFloatOrNull()
+                val weightValid = parsedWeight != null && parsedWeight in 30f..300f
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = weightText,
+                        onValueChange = { text ->
+                            weightText = text.filter { it.isDigit() || it == '.' || it == ',' }.take(6)
+                        },
+                        label = { Text("kg") },
+                        singleLine = true,
+                        isError = weightText.isNotBlank() && !weightValid,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = { vm.setGoalWeight(parsedWeight) },
+                        enabled = weightValid && parsedWeight != goalWeight,
+                    ) { Text("Αποθήκευση") }
+                }
+                if (goalWeight != null) {
+                    TextButton(onClick = { vm.setGoalWeight(null) }) { Text("Κατάργηση στόχου") }
+                }
+                Text(
+                    "Το καθημερινό ζύγισμα γίνεται από την αρχική οθόνη. Αν το βάρος έρχεται και από το " +
+                        "Garmin μέσω Health Connect, μπαίνει αυτόματα στην πορεία.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
         // --- Νηστεία ---
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -92,10 +133,21 @@ fun SettingsScreen(vm: MainViewModel) {
                         )
                     }
                 }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Το παράθυρο φαγητού ανοίγει στις", modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = {
+                        TimePickerDialog(
+                            context,
+                            { _, h, m -> vm.setFastStart(h * 60 + m) },
+                            fastStart / 60,
+                            fastStart % 60,
+                            true,
+                        ).show()
+                    }) { Text(Fasting.clock(fastStart)) }
+                }
                 Text(
-                    "Νηστεία $fastHours ώρες, παράθυρο φαγητού ${24 - fastHours} " +
-                        (if (24 - fastHours == 1) "ώρα" else "ώρες") + ". " +
-                        "Το παράθυρο ανοίγει με το πρώτο γεύμα μετά από κενό 10+ ωρών.",
+                    "Σταθερό παράθυρο φαγητού κάθε μέρα: ${Fasting.windowLabel(fastStart, fastHours)} " +
+                        "(νηστεία $fastHours ώρες). Ό,τι φας εκτός αυτών των ωρών σημειώνεται «εκτός παραθύρου».",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

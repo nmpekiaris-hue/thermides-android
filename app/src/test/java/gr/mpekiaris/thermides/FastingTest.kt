@@ -3,53 +3,77 @@ package gr.mpekiaris.thermides
 import gr.mpekiaris.thermides.fasting.Fasting
 import gr.mpekiaris.thermides.fasting.Fasting.HOUR
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.ZoneOffset
 
 class FastingTest {
+    private val utc = ZoneOffset.UTC
+    private val start = 11 * 60
+
     private fun h(day: Int, hour: Double) = (day * 24 * HOUR + hour * HOUR).toLong()
 
     @Test
-    fun windowOpensWithFirstMealAfterLongGap() {
-        val times = listOf(h(0, 13.0), h(0, 18.5), h(1, 13.5), h(1, 17.0))
+    fun fixedWindowBoundaries() {
+        assertEquals("11:00–17:00", Fasting.windowLabel(start, 18))
+        assertEquals("11:00–19:00", Fasting.windowLabel(start, 16))
+        assertFalse(Fasting.inWindow(10 * 60 + 59, start, 18))
+        assertTrue(Fasting.inWindow(11 * 60, start, 18))
+        assertTrue(Fasting.inWindow(17 * 60, start, 18))
+        assertFalse(Fasting.inWindow(17 * 60 + 1, start, 18))
+    }
+
+    @Test
+    fun mealsOutsideWindowAreFlagged() {
+        assertTrue(Fasting.outside(h(0, 9.0), start, 18, utc))
+        assertFalse(Fasting.outside(h(0, 13.0), start, 18, utc))
+        assertTrue(Fasting.outside(h(3, 21.5), start, 18, utc))
+        // 16:8 -> 11:00–19:00
+        assertFalse(Fasting.outside(h(0, 18.5), start, 16, utc))
+    }
+
+    @Test
+    fun windowAcrossMidnight() {
+        val late = 22 * 60 // 22:00–04:00
+        assertTrue(Fasting.inWindow(23 * 60 + 30, late, 18))
+        assertTrue(Fasting.inWindow(3 * 60, late, 18))
+        assertFalse(Fasting.inWindow(5 * 60, late, 18))
+    }
+
+    @Test
+    fun statusOpenDuringWindow() {
+        assertEquals(Fasting.Status.Open(h(0, 17.0)), Fasting.status(emptyList(), h(0, 12.0), start, 18, utc))
+    }
+
+    @Test
+    fun statusClosedCountsFromLastMeal() {
+        val times = listOf(h(0, 12.0), h(0, 16.0))
         assertEquals(
-            listOf(h(0, 13.0), h(0, 13.0), h(1, 13.5), h(1, 13.5)),
-            Fasting.windowStarts(times),
+            Fasting.Status.Closed(since = h(0, 16.0), opensAt = h(1, 11.0)),
+            Fasting.status(times, h(0, 20.0), start, 18, utc),
         )
-        assertEquals(listOf(false, false, false, false), Fasting.outside(times, 18))
-    }
-
-    @Test
-    fun lateMealIsOutsideWindow() {
-        val times = listOf(h(0, 13.0), h(0, 19.0), h(0, 19.5), h(0, 22.0))
-        // 18:6 -> το παράθυρο κλείνει 19:00· ακριβώς στις 19:00 μετράει ακόμη εντός.
-        assertEquals(listOf(false, false, true, true), Fasting.outside(times, 18))
-        // 16:8 -> κλείνει 21:00
-        assertEquals(listOf(false, false, false, true), Fasting.outside(times, 16))
-    }
-
-    @Test
-    fun shortGapDoesNotOpenNewWindow() {
-        // 22:00 εκτός, 07:00 την επομένη (κενό 9 ώρες) -> ακόμη το παλιό παράθυρο
-        val times = listOf(h(0, 13.0), h(0, 22.0), h(1, 7.0), h(1, 13.0))
-        assertEquals(listOf(false, true, true, false), Fasting.outside(times, 18))
-        // στις 13:00 της επομένης έχουν περάσει 24 ώρες από το άνοιγμα -> νέο παράθυρο
-        assertEquals(h(1, 13.0), Fasting.windowStarts(times).last())
-    }
-
-    @Test
-    fun statusOpenThenClosed() {
-        val times = listOf(h(0, 13.0), h(0, 18.0))
-        assertEquals(Fasting.Status.Open(h(0, 19.0)), Fasting.status(times, h(0, 15.0), 18))
+        // το επόμενο πρωί, πριν ανοίξει το παράθυρο
         assertEquals(
-            Fasting.Status.Closed(lastMeal = h(0, 18.0), eatAgainAt = h(1, 12.0)),
-            Fasting.status(times, h(0, 21.0), 18),
+            Fasting.Status.Closed(since = h(0, 16.0), opensAt = h(1, 11.0)),
+            Fasting.status(times, h(1, 9.0), start, 18, utc),
         )
     }
 
     @Test
-    fun statusIgnoresFutureEntriesAndHandlesEmpty() {
-        assertTrue(Fasting.status(emptyList(), h(0, 10.0), 18) is Fasting.Status.NoData)
-        assertTrue(Fasting.status(listOf(h(0, 13.0)), h(0, 10.0), 18) is Fasting.Status.NoData)
+    fun statusClosedWithoutMealsCountsFromWindowClose() {
+        assertEquals(
+            Fasting.Status.Closed(since = h(0, 17.0), opensAt = h(1, 11.0)),
+            Fasting.status(emptyList(), h(1, 9.0), start, 18, utc),
+        )
+    }
+
+    @Test
+    fun lateMealResetsFastingClock() {
+        val times = listOf(h(0, 13.0), h(0, 22.0))
+        assertEquals(
+            Fasting.Status.Closed(since = h(0, 22.0), opensAt = h(1, 11.0)),
+            Fasting.status(times, h(1, 9.0), start, 18, utc),
+        )
     }
 }

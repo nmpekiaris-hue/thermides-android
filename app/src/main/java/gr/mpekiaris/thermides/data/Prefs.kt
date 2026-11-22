@@ -44,6 +44,16 @@ class Prefs(context: Context) {
         get() = plain.getInt("fastHours", 18)
         set(value) = plain.edit().putInt("fastHours", value).apply()
 
+    /** Ώρα που ανοίγει το σταθερό παράθυρο φαγητού, σε λεπτά από τα μεσάνυχτα (προεπιλογή 11:00). */
+    var fastStart: Int
+        get() = plain.getInt("fastStart", 11 * 60)
+        set(value) = plain.edit().putInt("fastStart", value).apply()
+
+    /** Στόχος βάρους σε kg· null αν δεν έχει οριστεί. */
+    var goalWeight: Float?
+        get() = plain.getFloat("goalWeight", 0f).takeIf { it > 0f }
+        set(value) = plain.edit().putFloat("goalWeight", value ?: 0f).apply()
+
     var apiKey: String?
         get() = secure?.getString("claudeApiKey", null)?.takeIf { it.isNotBlank() }
         set(value) {

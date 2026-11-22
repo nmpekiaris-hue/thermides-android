@@ -7,6 +7,9 @@ import androidx.room.Delete
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
@@ -72,16 +75,47 @@ interface FoodDao {
     suspend fun deleteBetween(from: Long, to: Long): Int
 }
 
-@Database(entities = [FoodEntry::class], version = 1, exportSchema = false)
+/** Ένα ζύγισμα ανά ημέρα (χειροκίνητη καταχώρηση). [day] = LocalDate.toEpochDay(). */
+@Entity(tableName = "weight")
+data class WeightEntry(
+    @PrimaryKey val day: Long,
+    val kg: Double,
+)
+
+@Dao
+interface WeightDao {
+    @Query("SELECT * FROM weight ORDER BY day")
+    fun all(): Flow<List<WeightEntry>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun put(entry: WeightEntry)
+
+    @Query("DELETE FROM weight WHERE day = :day")
+    suspend fun delete(day: Long)
+}
+
+@Database(entities = [FoodEntry::class, WeightEntry::class], version = 2, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun food(): FoodDao
+
+    abstract fun weight(): WeightDao
 
     companion object {
         @Volatile
         private var instance: AppDb? = null
 
+        /** v2: πίνακας ζυγισμάτων. Τα φαγητά μένουν ανέγγιχτα. */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `weight` (`day` INTEGER NOT NULL, `kg` REAL NOT NULL, PRIMARY KEY(`day`))"
+                )
+            }
+        }
+
         fun get(context: Context): AppDb = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, AppDb::class.java, "thermides.db")
+                .addMigrations(MIGRATION_1_2)
                 .build()
                 .also { instance = it }
         }

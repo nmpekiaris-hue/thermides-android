@@ -48,3 +48,14 @@ fun weekday(date: LocalDate): String = WEEKDAY.format(date)
 fun stamp(instant: Instant): String = STAMP.format(instant.atZone(ZoneId.systemDefault()))
 
 fun kcal(value: Int): String = "%,d".format(GREEK, value)
+
+fun kgText(value: Double): String = String.format(GREEK, "%.1f kg", value)
+
+/** Μεταβολή βάρους με πρόσημο, π.χ. «−0,4 kg». */
+fun kgDelta(value: Double): String = when {
+    value > 0.049 -> String.format(GREEK, "+%.1f kg", value)
+    value < -0.049 -> String.format(GREEK, "−%.1f kg", -value)
+    else -> "0,0 kg"
+}
+
+fun dayMonth(date: LocalDate): String = "${date.dayOfMonth}/${date.monthValue}"

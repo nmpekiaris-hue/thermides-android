@@ -8,6 +8,7 @@ import androidx.health.connect.client.records.BloodPressureRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.request.AggregateGroupByPeriodRequest
 import androidx.health.connect.client.request.AggregateRequest
@@ -19,6 +20,9 @@ import java.time.Period
 import java.time.temporal.ChronoUnit
 
 enum class HealthStatus { UNAVAILABLE, NEEDS_UPDATE, NO_PERMISSION, READY }
+
+/** Θερμίδες που κάηκαν μια ημέρα: [total] = βασικός μεταβολισμός + δραστηριότητα, [active] = μόνο δραστηριότητα. */
+data class Burned(val total: Double?, val active: Double?)
 
 data class BpReading(val time: Instant, val systolic: Int, val diastolic: Int, val source: String)
 
@@ -64,8 +68,9 @@ class HealthRepo(context: Context) {
         val P_STEPS = HealthPermission.getReadPermission(StepsRecord::class)
         val P_ACTIVE = HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class)
         val P_WEIGHT = HealthPermission.getReadPermission(WeightRecord::class)
+        val P_TOTAL = HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class)
 
-        val PERMISSIONS: Set<String> = setOf(P_BP, P_HR, P_RHR, P_STEPS, P_ACTIVE, P_WEIGHT)
+        val PERMISSIONS: Set<String> = setOf(P_BP, P_HR, P_RHR, P_STEPS, P_ACTIVE, P_TOTAL, P_WEIGHT)
 
         private val LABELS = linkedMapOf(
             P_BP to "πίεση",
@@ -73,6 +78,7 @@ class HealthRepo(context: Context) {
             P_RHR to "παλμοί ηρεμίας",
             P_STEPS to "βήματα",
             P_ACTIVE to "ενεργές θερμίδες",
+            P_TOTAL to "συνολικές θερμίδες",
             P_WEIGHT to "βάρος",
         )
 
@@ -106,17 +112,24 @@ class HealthRepo(context: Context) {
         else -> HealthStatus.UNAVAILABLE
     }
 
-    /** Ενεργές θερμίδες μιας ημέρας, ή null αν δεν υπάρχει άδεια/δεδομένα. */
-    suspend fun activeKcal(day: LocalDate): Double? {
+    /** Θερμίδες που κάηκαν μια ημέρα (για σήμερα: μέχρι τώρα), ή null αν δεν υπάρχει άδεια. */
+    suspend fun burned(day: LocalDate): Burned? {
         if (sdkStatus() != HealthConnectClient.SDK_AVAILABLE) return null
-        if (P_ACTIVE !in granted()) return null
-        val result = client.aggregate(
-            AggregateRequest(
-                metrics = setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL),
-                timeRangeFilter = TimeRangeFilter.between(day.atStartOfDay(), day.plusDays(1).atStartOfDay()),
-            )
-        )
-        return result[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
+        val granted = granted()
+        if (P_ACTIVE !in granted && P_TOTAL !in granted) return null
+        val filter = TimeRangeFilter.between(day.atStartOfDay(), day.plusDays(1).atStartOfDay())
+        // Ξεχωριστές κλήσεις: μια μετρική χωρίς άδεια ή με σφάλμα δεν πρέπει να ρίξει την άλλη.
+        val total = if (P_TOTAL in granted) runCatching {
+            client.aggregate(AggregateRequest(setOf(TotalCaloriesBurnedRecord.ENERGY_TOTAL), filter))[
+                TotalCaloriesBurnedRecord.ENERGY_TOTAL
+            ]?.inKilocalories
+        }.getOrNull() else null
+        val active = if (P_ACTIVE in granted) runCatching {
+            client.aggregate(AggregateRequest(setOf(ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL), filter))[
+                ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL
+            ]?.inKilocalories
+        }.getOrNull() else null
+        return Burned(total = total?.takeIf { it > 0 }, active = active?.takeIf { it > 0 })
     }
 
     suspend fun snapshot(): HealthSnapshot {
